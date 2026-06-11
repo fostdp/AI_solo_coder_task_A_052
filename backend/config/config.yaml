@@ -1,0 +1,27 @@
+server:
+  port: 8080
+  mode: debug
+
+influxdb:
+  addr: http://localhost:8086
+  username: admin
+  password: admin@2024
+  database: ancient_wood_monitor
+  precision: s
+
+lora:
+  data_endpoint: /api/v1/lora/data
+  device_count: 90
+
+alert:
+  acoustic_event_threshold: 100
+  moisture_threshold: 25.0
+  wechat_webhook_url: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-key
+  sms_api_url: https://sms.example.com/send
+  sms_api_key: your-sms-api-key
+
+fumigation:
+  default_release_rate: 5.0
+  wind_speed: 2.0
+  wind_direction: 0
+  stability_class: D

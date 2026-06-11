@@ -1,0 +1,26 @@
+CREATE DATABASE "ancient_wood_monitor" WITH DURATION 365d REPLICATION 1 SHARD DURATION 7d NAME "rp_1year"
+
+CREATE RETENTION POLICY "rp_forever" ON "ancient_wood_monitor" DURATION INF REPLICATION 1
+
+USE "ancient_wood_monitor"
+
+CREATE CONTINUOUS QUERY "cq_acoustic_hourly" ON "ancient_wood_monitor"
+BEGIN
+  SELECT count(event_count) AS event_count, mean(energy) AS avg_energy, max(energy) AS max_energy
+  INTO "rp_forever"."acoustic_emission_hourly"
+  FROM "acoustic_emission"
+  GROUP BY time(1h), sensor_id, building, location
+END
+
+CREATE CONTINUOUS QUERY "cq_moisture_hourly" ON "ancient_wood_monitor"
+BEGIN
+  SELECT mean(moisture) AS avg_moisture, max(moisture) AS max_moisture, min(moisture) AS min_moisture
+  INTO "rp_forever"."moisture_hourly"
+  FROM "wood_moisture"
+  GROUP BY time(1h), sensor_id, building, location
+END
+
+CREATE USER "monitor_user" WITH PASSWORD 'monitor@2024'
+GRANT READ ON "ancient_wood_monitor" TO "monitor_user"
+
+CREATE USER "admin_user" WITH PASSWORD 'admin@2024' WITH ALL PRIVILEGES

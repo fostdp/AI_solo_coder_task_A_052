@@ -422,3 +422,25 @@ func (h *Handler) sendToPipeline(packet models.LoRaDataPacket) {
 	default:
 	}
 }
+
+func (h *Handler) HealthCheck(c *gin.Context) {
+	status := "ok"
+	pipelineStatus := "running"
+
+	if h.pipeline == nil {
+		pipelineStatus = "not_initialized"
+		status = "degraded"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":    status,
+		"version":   "1.0.0",
+		"timestamp": time.Now().UTC(),
+		"services": gin.H{
+			"influxdb":   h.influxDB != nil,
+			"pipeline":   pipelineStatus,
+			"alerter":    h.alertService != nil,
+			"sensors":    h.sensorService != nil,
+		},
+	})
+}

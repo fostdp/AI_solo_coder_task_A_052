@@ -192,22 +192,28 @@ func runSimulation() {
 	fmt.Printf("Moisture sensors: %d\n", len(moistureSensors))
 	fmt.Println("Press Ctrl+C to stop")
 
-	ticker := time.NewTicker(3 * time.Second)
+	reportInterval := 1 * time.Hour
+	simInterval := 3 * time.Second
+
+	simStartTime := time.Now().Truncate(reportInterval)
+	simHourOffset := 0
+
+	ticker := time.NewTicker(simInterval)
 	defer ticker.Stop()
 
-	hour := 0
 	for range ticker.C {
-		now := time.Now()
+		reportTime := simStartTime.Add(time.Duration(simHourOffset) * reportInterval)
+		hour := reportTime.Hour()
 
 		for _, sensor := range acousticSensors {
 			data := generateAcousticData(sensor, hour)
 			seq := atomic.AddUint64(&globalSequence, 1)
 
 			packet := LoRaDataPacket{
-				PacketID:        generatePacketID(sensor.ID, now, seq),
+				PacketID:        generatePacketID(sensor.ID, reportTime, seq),
 				DeviceType:      sensor.Type,
 				DeviceID:        sensor.ID,
-				Timestamp:       now,
+				Timestamp:       reportTime,
 				Sequence:        seq,
 				Data:            data,
 				RSSI:            -70 - rand.Float64()*40,
@@ -218,7 +224,8 @@ func runSimulation() {
 			if err := sendPacket(packet); err != nil {
 				fmt.Printf("Error sending acoustic data from %s: %v\n", sensor.ID, err)
 			} else {
-				fmt.Printf("Sent acoustic data: %s, events: %v\n", sensor.ID, data["event_count"])
+				fmt.Printf("[%s] Sent acoustic: %s, events: %v\n",
+					reportTime.Format("2006-01-02 15:04"), sensor.ID, data["event_count"])
 			}
 
 			if rand.Float64() < 0.15 {
@@ -234,10 +241,10 @@ func runSimulation() {
 			seq := atomic.AddUint64(&globalSequence, 1)
 
 			packet := LoRaDataPacket{
-				PacketID:        generatePacketID(sensor.ID, now, seq),
+				PacketID:        generatePacketID(sensor.ID, reportTime, seq),
 				DeviceType:      sensor.Type,
 				DeviceID:        sensor.ID,
-				Timestamp:       now,
+				Timestamp:       reportTime,
 				Sequence:        seq,
 				Data:            data,
 				RSSI:            -65 - rand.Float64()*35,
@@ -248,7 +255,8 @@ func runSimulation() {
 			if err := sendPacket(packet); err != nil {
 				fmt.Printf("Error sending moisture data from %s: %v\n", sensor.ID, err)
 			} else {
-				fmt.Printf("Sent moisture data: %s, moisture: %.1f%%\n", sensor.ID, data["moisture"])
+				fmt.Printf("[%s] Sent moisture: %s, moisture: %.1f%%\n",
+					reportTime.Format("2006-01-02 15:04"), sensor.ID, data["moisture"])
 			}
 
 			if rand.Float64() < 0.1 {
@@ -259,7 +267,7 @@ func runSimulation() {
 			}
 		}
 
-		hour = (hour + 1) % 24
+		simHourOffset = (simHourOffset + 1) % 24
 		fmt.Println("---")
 	}
 }

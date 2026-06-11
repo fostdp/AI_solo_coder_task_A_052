@@ -1,22 +1,24 @@
 package algorithms
 
 import (
+	"ancient-wood-monitor/config"
 	"ancient-wood-monitor/internal/algorithms/lstm"
 	"math"
+	"sync"
 	"time"
 )
 
 type LSTMPredictor struct {
-	InputSize     int
-	HiddenSize    int
-	OutputSize    int
-	WeightsIH     [][]float64
-	WeightsHH     [][]float64
-	Biases        []float64
-	WeightsHO     [][]float64
-	BiasesO       []float64
-	HiddenState   []float64
-	CellState     []float64
+	InputSize   int       `json:"input_size"`
+	HiddenSize  int       `json:"hidden_size"`
+	OutputSize  int       `json:"output_size"`
+	WeightsIH   [][]float64 `json:"weights_ih"`
+	WeightsHH   [][]float64 `json:"weights_hh"`
+	Biases      []float64   `json:"biases"`
+	WeightsHO   [][]float64 `json:"weights_ho"`
+	BiasesO     []float64   `json:"biases_o"`
+	HiddenState []float64   `json:"-"`
+	CellState   []float64   `json:"-"`
 }
 
 type TermitePredictionResult struct {
@@ -131,12 +133,23 @@ func (p *LSTMPredictor) Reset() {
 	p.CellState = make([]float64, p.HiddenSize)
 }
 
-func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int) ([]TermitePredictionResult, error) {
-	inputSize := 8
-	hiddenSize := 32
-	outputSize := 1
+var modelService *lstm.ModelService
+var modelServiceOnce sync.Once
 
-	predictor := NewLSTMPredictor(inputSize, hiddenSize, outputSize)
+func getModelService() *lstm.ModelService {
+	modelServiceOnce.Do(func() {
+		modelPath := ""
+		if config.AppConfig != nil && config.AppConfig.Model.LstmPath != "" {
+			modelPath = config.AppConfig.Model.LstmPath
+		}
+		modelService = lstm.GetModelService(modelPath)
+	})
+	return modelService
+}
+
+func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int) ([]TermitePredictionResult, error) {
+	ms := getModelService()
+	ms.ResetState()
 
 	sequenceLen := len(historicalData)
 	if sequenceLen == 0 {
@@ -198,7 +211,7 @@ func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int)
 			0.3 + 0.2*math.Sin(float64(i)*math.Pi/24),
 		}
 
-		output := predictor.Forward(input)
+		output := ms.Predict(input)
 
 		activityLevel := output[0] * 150.0
 

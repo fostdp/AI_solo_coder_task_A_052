@@ -3,6 +3,7 @@ package services
 import (
 	"ancient-wood-monitor/config"
 	"ancient-wood-monitor/internal/models"
+	"ancient-wood-monitor/internal/services/influx"
 	"fmt"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 type InfluxDBService struct {
 	client influxdb.Client
+	writer *influx.AsyncWriter
 }
 
 func NewInfluxDBService() (*InfluxDBService, error) {
@@ -29,10 +31,23 @@ func NewInfluxDBService() (*InfluxDBService, error) {
 		return nil, fmt.Errorf("failed to ping influxdb: %w", err)
 	}
 
-	return &InfluxDBService{client: client}, nil
+	queueSize := 4096
+	maxRetries := 3
+	if cfg.WriteQueueSize > 0 {
+		queueSize = cfg.WriteQueueSize
+	}
+	if cfg.WriteMaxRetries > 0 {
+		maxRetries = cfg.WriteMaxRetries
+	}
+	writer := influx.NewAsyncWriter(client, queueSize, maxRetries)
+
+	return &InfluxDBService{client: client, writer: writer}, nil
 }
 
 func (s *InfluxDBService) Close() error {
+	if s.writer != nil {
+		s.writer.Close()
+	}
 	return s.client.Close()
 }
 
@@ -67,6 +82,10 @@ func (s *InfluxDBService) WriteAcousticEmission(data *models.AcousticEmissionDat
 	}
 
 	bp.AddPoint(pt)
+	if s.writer != nil {
+		s.writer.Write(bp)
+		return nil
+	}
 	return s.client.Write(bp)
 }
 
@@ -96,6 +115,10 @@ func (s *InfluxDBService) WriteWoodMoisture(data *models.WoodMoistureData) error
 	}
 
 	bp.AddPoint(pt)
+	if s.writer != nil {
+		s.writer.Write(bp)
+		return nil
+	}
 	return s.client.Write(bp)
 }
 
@@ -291,6 +314,10 @@ func (s *InfluxDBService) WriteAlert(alert *models.Alert) error {
 	}
 
 	bp.AddPoint(pt)
+	if s.writer != nil {
+		s.writer.Write(bp)
+		return nil
+	}
 	return s.client.Write(bp)
 }
 

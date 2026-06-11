@@ -12,6 +12,7 @@ type Config struct {
 	LoRa        LoRaConfig        `mapstructure:"lora"`
 	Alert       AlertConfig       `mapstructure:"alert"`
 	Fumigation  FumigationConfig  `mapstructure:"fumigation"`
+	Model       ModelConfig       `mapstructure:"model"`
 }
 
 type ServerConfig struct {
@@ -20,16 +21,19 @@ type ServerConfig struct {
 }
 
 type InfluxDBConfig struct {
-	Addr      string `mapstructure:"addr"`
-	Username  string `mapstructure:"username"`
-	Password  string `mapstructure:"password"`
-	Database  string `mapstructure:"database"`
-	Precision string `mapstructure:"precision"`
+	Addr           string `mapstructure:"addr"`
+	Username       string `mapstructure:"username"`
+	Password       string `mapstructure:"password"`
+	Database       string `mapstructure:"database"`
+	Precision      string `mapstructure:"precision"`
+	WriteQueueSize int    `mapstructure:"write_queue_size"`
+	WriteMaxRetries int   `mapstructure:"write_max_retries"`
 }
 
 type LoRaConfig struct {
 	DataEndpoint string `mapstructure:"data_endpoint"`
 	DeviceCount  int    `mapstructure:"device_count"`
+	UDPAddr      string `mapstructure:"udp_addr"`
 }
 
 type AlertConfig struct {
@@ -45,6 +49,13 @@ type FumigationConfig struct {
 	WindSpeed          float64 `mapstructure:"wind_speed"`
 	WindDirection      float64 `mapstructure:"wind_direction"`
 	StabilityClass     string  `mapstructure:"stability_class"`
+}
+
+type ModelConfig struct {
+	LstmPath       string `mapstructure:"lstm_path"`
+	LstmInputSize  int    `mapstructure:"lstm_input_size"`
+	LstmHiddenSize int    `mapstructure:"lstm_hidden_size"`
+	LstmOutputSize int    `mapstructure:"lstm_output_size"`
 }
 
 var AppConfig *Config

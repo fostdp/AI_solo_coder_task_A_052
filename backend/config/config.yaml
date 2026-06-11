@@ -8,10 +8,13 @@ influxdb:
   password: admin@2024
   database: ancient_wood_monitor
   precision: s
+  write_queue_size: 4096
+  write_max_retries: 3
 
 lora:
   data_endpoint: /api/v1/lora/data
   device_count: 90
+  udp_addr: ":5678"
 
 alert:
   acoustic_event_threshold: 100
@@ -25,3 +28,9 @@ fumigation:
   wind_speed: 2.0
   wind_direction: 0
   stability_class: D
+
+model:
+  lstm_path: ./models/lstm_weights.json
+  lstm_input_size: 8
+  lstm_hidden_size: 32
+  lstm_output_size: 1

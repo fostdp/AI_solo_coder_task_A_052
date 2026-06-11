@@ -3,11 +3,16 @@ package main
 import (
 	"ancient-wood-monitor/config"
 	"ancient-wood-monitor/internal/handlers"
+	"ancient-wood-monitor/internal/pipeline"
 	"ancient-wood-monitor/internal/services"
+	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,7 +37,21 @@ func main() {
 
 	alertService := services.NewAlertService(influxDBService)
 	sensorService := services.NewSensorService()
-	handler := handlers.NewHandler(influxDBService, alertService, sensorService)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	servicePipeline, err := pipeline.NewServicePipeline(config.AppConfig)
+	if err != nil {
+		log.Fatalf("Failed to create service pipeline: %v", err)
+	}
+	if err := servicePipeline.Start(ctx); err != nil {
+		log.Fatalf("Failed to start pipeline: %v", err)
+	}
+	defer servicePipeline.Stop()
+	log.Println("Service pipeline started (4 stages)")
+
+	handler := handlers.NewHandler(influxDBService, alertService, sensorService, servicePipeline)
 
 	r := gin.Default()
 

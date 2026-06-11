@@ -1,18 +1,22 @@
 package config
 
 import (
-	"fmt"
+	"log"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
+var AppConfig *Config
+
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	InfluxDB    InfluxDBConfig    `mapstructure:"influxdb"`
-	LoRa        LoRaConfig        `mapstructure:"lora"`
-	Alert       AlertConfig       `mapstructure:"alert"`
-	Fumigation  FumigationConfig  `mapstructure:"fumigation"`
-	Model       ModelConfig       `mapstructure:"model"`
+	Server             ServerConfig             `mapstructure:"server"`
+	InfluxDB           InfluxDBConfig           `mapstructure:"influxdb"`
+	LoRa               LoRaConfig               `mapstructure:"lora"`
+	Alert              AlertConfig              `mapstructure:"alert"`
+	Fumigation         FumigationConfig         `mapstructure:"fumigation"`
+	Model              ModelConfig              `mapstructure:"model"`
+	Pipeline           PipelineConfig           `mapstructure:"pipeline"`
 }
 
 type ServerConfig struct {
@@ -21,13 +25,13 @@ type ServerConfig struct {
 }
 
 type InfluxDBConfig struct {
-	Addr           string `mapstructure:"addr"`
-	Username       string `mapstructure:"username"`
-	Password       string `mapstructure:"password"`
-	Database       string `mapstructure:"database"`
-	Precision      string `mapstructure:"precision"`
-	WriteQueueSize int    `mapstructure:"write_queue_size"`
-	WriteMaxRetries int   `mapstructure:"write_max_retries"`
+	Addr            string `mapstructure:"addr"`
+	Username        string `mapstructure:"username"`
+	Password        string `mapstructure:"password"`
+	Database        string `mapstructure:"database"`
+	Precision       string `mapstructure:"precision"`
+	WriteQueueSize  int    `mapstructure:"write_queue_size"`
+	WriteMaxRetries int    `mapstructure:"write_max_retries"`
 }
 
 type LoRaConfig struct {
@@ -58,20 +62,70 @@ type ModelConfig struct {
 	LstmOutputSize int    `mapstructure:"lstm_output_size"`
 }
 
-var AppConfig *Config
+type PipelineConfig struct {
+	BufferSize        int                `mapstructure:"buffer_size"`
+	LoRaIngest        LoRaIngestConfig   `mapstructure:"lora_ingest"`
+	TermiteLSTM       TermiteLSTMConfig  `mapstructure:"termite_lstm"`
+	FumigantDiffusion FumigantConfig     `mapstructure:"fumigant_diffusion"`
+	Alerter           AlerterConfig      `mapstructure:"alerter"`
+}
 
-func LoadConfig(configPath string) error {
-	viper.SetConfigFile(configPath)
-	viper.SetConfigType("yaml")
+type LoRaIngestConfig struct {
+	ExpectedItems     uint64        `mapstructure:"expected_items"`
+	FalsePositiveRate float64       `mapstructure:"false_positive_rate"`
+	CacheTTL          time.Duration `mapstructure:"cache_ttl"`
+	MaxCacheSize      int           `mapstructure:"max_cache_size"`
+}
 
-	if err := viper.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
+type TermiteLSTMConfig struct {
+	EWMAAcousticAlpha   float64 `mapstructure:"ewma_acoustic_alpha"`
+	EWMAMoistureAlpha   float64 `mapstructure:"ewma_moisture_alpha"`
+	EWMAMaxHistory      int     `mapstructure:"ewma_max_history"`
+	SpikeThresholdSigma float64 `mapstructure:"spike_threshold_sigma"`
+	ConsecutiveConfirm  int     `mapstructure:"consecutive_confirm"`
+	PredictionHours     int     `mapstructure:"prediction_hours"`
+}
+
+type FumigantConfig struct {
+	DefaultReleaseRate float64 `mapstructure:"default_release_rate"`
+	DefaultWindSpeed   float64 `mapstructure:"default_wind_speed"`
+	DefaultWindDir     float64 `mapstructure:"default_wind_direction"`
+	StabilityClass     string  `mapstructure:"stability_class"`
+	GridResolution     float64 `mapstructure:"grid_resolution"`
+	GridSizeX          int     `mapstructure:"grid_size_x"`
+	GridSizeY          int     `mapstructure:"grid_size_y"`
+	GridSizeZ          int     `mapstructure:"grid_size_z"`
+	ExposureTimeHours  float64 `mapstructure:"exposure_time_hours"`
+}
+
+type AlerterConfig struct {
+	AcousticThreshold float64       `mapstructure:"acoustic_threshold"`
+	MoistureThreshold float64       `mapstructure:"moisture_threshold"`
+	CooldownPeriod    time.Duration `mapstructure:"cooldown_period"`
+	EnableWeChat      bool          `mapstructure:"enable_wechat"`
+	EnableSMS         bool          `mapstructure:"enable_sms"`
+}
+
+func LoadConfig(path string) error {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+
+	v.SetDefault("server.port", 8080)
+	v.SetDefault("server.mode", "debug")
+	v.SetDefault("influxdb.write_queue_size", 4096)
+	v.SetDefault("influxdb.write_max_retries", 3)
+	v.SetDefault("pipeline.buffer_size", 4096)
+
+	if err := v.ReadInConfig(); err != nil {
+		return err
 	}
 
 	AppConfig = &Config{}
-	if err := viper.Unmarshal(AppConfig); err != nil {
-		return fmt.Errorf("failed to unmarshal config: %w", err)
+	if err := v.Unmarshal(AppConfig); err != nil {
+		return err
 	}
 
+	log.Printf("Config loaded from %s", path)
 	return nil
 }

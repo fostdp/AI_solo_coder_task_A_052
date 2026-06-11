@@ -2,11 +2,13 @@ package services
 
 import (
 	"ancient-wood-monitor/config"
+	"ancient-wood-monitor/internal/algorithms/lstm"
 	"ancient-wood-monitor/internal/models"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -20,33 +22,93 @@ func generateUUID() string {
 }
 
 type AlertService struct {
-	influxDB *InfluxDBService
+	influxDB          *InfluxDBService
+	acousticSmoother  *lstm.EWMASmoother
+	moistureSmoother  *lstm.EWMASmoother
+	consecutiveAlerts map[string]int
+	alertCooldown     map[string]time.Time
+	mu                sync.RWMutex
 }
 
 func NewAlertService(influxDB *InfluxDBService) *AlertService {
-	return &AlertService{influxDB: influxDB}
+	return &AlertService{
+		influxDB:          influxDB,
+		acousticSmoother:  lstm.NewEWMASmoother(0.25, 96),
+		moistureSmoother:  lstm.NewEWMASmoother(0.2, 96),
+		consecutiveAlerts: make(map[string]int),
+		alertCooldown:     make(map[string]time.Time),
+	}
 }
 
 func (s *AlertService) CheckAcousticAlert(sensorID, building, location string, eventRate float64) (*models.Alert, error) {
 	threshold := config.AppConfig.Alert.AcousticEventThreshold
 
-	if eventRate > threshold {
+	smoothedRate := s.acousticSmoother.Smooth(sensorID, eventRate)
+
+	isSpike := s.acousticSmoother.IsSpike(sensorID, eventRate, 2.5)
+	if isSpike {
+		return nil, nil
+	}
+
+	trend, hasTrend := s.acousticSmoother.GetTrend(sensorID)
+	if hasTrend && trend < 0 && smoothedRate < threshold*1.2 {
+		return nil, nil
+	}
+
+	history := s.acousticSmoother.GetHistory(sensorID)
+	consecutiveOver := 0
+	for i := len(history) - 1; i >= 0 && i >= len(history)-3; i-- {
+		if history[i] > threshold {
+			consecutiveOver++
+		} else {
+			break
+		}
+	}
+
+	cooldownKey := "acoustic:" + sensorID
+	s.mu.RLock()
+	if cd, ok := s.alertCooldown[cooldownKey]; ok && time.Since(cd) < 10*time.Minute {
+		s.mu.RUnlock()
+		return nil, nil
+	}
+	s.mu.RUnlock()
+
+	shouldAlert := smoothedRate > threshold*1.1 && consecutiveOver >= 2
+	if !shouldAlert && smoothedRate > threshold {
+		s.mu.Lock()
+		s.consecutiveAlerts[sensorID]++
+		count := s.consecutiveAlerts[sensorID]
+		s.mu.Unlock()
+
+		if count >= 2 {
+			shouldAlert = true
+		}
+	}
+
+	if shouldAlert {
+		s.mu.Lock()
+		s.alertCooldown[cooldownKey] = time.Now()
+		s.consecutiveAlerts[sensorID] = 0
+		s.mu.Unlock()
+
 		alert := &models.Alert{
 			ID:           generateUUID(),
 			Type:         "acoustic_emission",
-			Severity:     getSeverity(eventRate, threshold),
+			Severity:     getSeverity(smoothedRate, threshold),
 			SensorID:     sensorID,
 			Building:     building,
 			Location:     location,
-			Value:        eventRate,
+			Value:        smoothedRate,
 			Threshold:    threshold,
-			Message:      fmt.Sprintf("声发射事件率 %.1f 次/小时，超过阈值 %.1f 次/小时，疑似白蚁活动", eventRate, threshold),
+			Message:      fmt.Sprintf("声发射事件率 %.1f 次/小时（平滑后），超过阈值 %.1f 次/小时，疑似白蚁活动", smoothedRate, threshold),
 			Timestamp:    time.Now(),
 			Acknowledged: false,
 		}
 
-		if err := s.influxDB.WriteAlert(alert); err != nil {
-			return nil, err
+		if s.influxDB != nil {
+			if err := s.influxDB.WriteAlert(alert); err != nil {
+				return nil, err
+			}
 		}
 
 		go s.sendNotifications(alert)
@@ -60,23 +122,56 @@ func (s *AlertService) CheckAcousticAlert(sensorID, building, location string, e
 func (s *AlertService) CheckMoistureAlert(sensorID, building, location string, moisture float64) (*models.Alert, error) {
 	threshold := config.AppConfig.Alert.MoistureThreshold
 
-	if moisture > threshold {
+	smoothedMoisture := s.moistureSmoother.Smooth(sensorID, moisture)
+
+	isSpike := s.moistureSmoother.IsSpike(sensorID, moisture, 2.0)
+	if isSpike {
+		return nil, nil
+	}
+
+	history := s.moistureSmoother.GetHistory(sensorID)
+	consecutiveOver := 0
+	for i := len(history) - 1; i >= 0 && i >= len(history)-3; i-- {
+		if history[i] > threshold {
+			consecutiveOver++
+		} else {
+			break
+		}
+	}
+
+	cooldownKey := "moisture:" + sensorID
+	s.mu.RLock()
+	if cd, ok := s.alertCooldown[cooldownKey]; ok && time.Since(cd) < 30*time.Minute {
+		s.mu.RUnlock()
+		return nil, nil
+	}
+	s.mu.RUnlock()
+
+	shouldAlert := smoothedMoisture > threshold*1.05 && consecutiveOver >= 2
+
+	if shouldAlert {
+		s.mu.Lock()
+		s.alertCooldown[cooldownKey] = time.Now()
+		s.mu.Unlock()
+
 		alert := &models.Alert{
 			ID:           generateUUID(),
 			Type:         "wood_moisture",
-			Severity:     getMoistureSeverity(moisture, threshold),
+			Severity:     getMoistureSeverity(smoothedMoisture, threshold),
 			SensorID:     sensorID,
 			Building:     building,
 			Location:     location,
-			Value:        moisture,
+			Value:        smoothedMoisture,
 			Threshold:    threshold,
-			Message:      fmt.Sprintf("木材含水率 %.1f%%，超过阈值 %.1f%%，存在虫蛀风险", moisture, threshold),
+			Message:      fmt.Sprintf("木材含水率 %.1f%%（平滑后），超过阈值 %.1f%%，存在虫蛀风险", smoothedMoisture, threshold),
 			Timestamp:    time.Now(),
 			Acknowledged: false,
 		}
 
-		if err := s.influxDB.WriteAlert(alert); err != nil {
-			return nil, err
+		if s.influxDB != nil {
+			if err := s.influxDB.WriteAlert(alert); err != nil {
+				return nil, err
+			}
 		}
 
 		go s.sendNotifications(alert)

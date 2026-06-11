@@ -1,6 +1,7 @@
 package algorithms
 
 import (
+	"ancient-wood-monitor/internal/algorithms/lstm"
 	"math"
 	"time"
 )
@@ -142,17 +143,32 @@ func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int)
 		return nil, nil
 	}
 
+	smoother := lstm.NewEWMASmoother(0.3, 48)
+	smoothedFields := []string{"event_count", "energy", "amplitude", "duration", "peak_freq"}
+	processedData := smoother.SmoothMapSlice(historicalData, smoothedFields)
+
+	eventCounts := make([]float64, len(processedData))
+	for i, d := range processedData {
+		eventCounts[i] = d["event_count"]
+	}
+	eventCounts = lstm.RemoveOutliers(eventCounts, 1.5)
+	eventCounts = lstm.DoubleExponentialSmoothing(eventCounts, 0.3, 0.1)
+
+	for i, d := range processedData {
+		d["event_count"] = eventCounts[i]
+	}
+
 	var lastActivity float64
 	var avgEnergy float64
 	var avgEvents float64
 	var trend float64
 
-	for i, d := range historicalData {
+	for i, d := range processedData {
 		lastActivity = d["event_count"] / 100.0
 		avgEnergy += d["energy"]
 		avgEvents += d["event_count"]
 		if i > 0 {
-			trend += (d["event_count"] - historicalData[i-1]["event_count"]) / 100.0
+			trend += (d["event_count"] - processedData[i-1]["event_count"]) / 100.0
 		}
 	}
 	avgEnergy /= float64(sequenceLen)
@@ -166,6 +182,9 @@ func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int)
 
 	baseActivity := avgEvents / 100.0
 	currentActivity := lastActivity
+
+	var lastPredicted float64
+	smoothedPrediction := 0.0
 
 	for i := 0; i < hoursAhead; i++ {
 		input := []float64{
@@ -186,6 +205,15 @@ func PredictTermiteActivity(historicalData []map[string]float64, hoursAhead int)
 		activityLevel += trend * float64(i) * 5.0
 		activityLevel += 20.0 * math.Sin(float64(now.Hour()+i)*math.Pi/12)
 		activityLevel = math.Max(0, math.Min(200, activityLevel))
+
+		if i > 0 {
+			alpha := 0.4
+			smoothedPrediction = alpha*activityLevel + (1-alpha)*lastPredicted
+			activityLevel = smoothedPrediction
+		} else {
+			smoothedPrediction = activityLevel
+		}
+		lastPredicted = activityLevel
 
 		riskLevel := getRiskLevel(activityLevel)
 		confidence := 0.6 + 0.3*math.Exp(-float64(i)/24.0)

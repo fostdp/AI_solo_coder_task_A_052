@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"ancient-wood-monitor/internal/algorithms"
+	"ancient-wood-monitor/internal/algorithms/lstm"
 	"ancient-wood-monitor/internal/models"
 	"ancient-wood-monitor/internal/services"
+	lorasvc "ancient-wood-monitor/internal/services/lora"
 	"math"
 	"math/rand"
 	"net/http"
@@ -17,6 +19,9 @@ type Handler struct {
 	influxDB      *services.InfluxDBService
 	alertService  *services.AlertService
 	sensorService *services.SensorService
+	dedupService  *lorasvc.PacketDeduplicator
+	acousticEWMA  *lstm.EWMASmoother
+	moistureEWMA  *lstm.EWMASmoother
 }
 
 func NewHandler(influxDB *services.InfluxDBService, alertService *services.AlertService, sensorService *services.SensorService) *Handler {
@@ -24,6 +29,9 @@ func NewHandler(influxDB *services.InfluxDBService, alertService *services.Alert
 		influxDB:      influxDB,
 		alertService:  alertService,
 		sensorService: sensorService,
+		dedupService:  lorasvc.NewPacketDeduplicator(100000, 24*time.Hour, 50000),
+		acousticEWMA:  lstm.NewEWMASmoother(0.3, 48),
+		moistureEWMA:  lstm.NewEWMASmoother(0.25, 48),
 	}
 }
 
@@ -31,6 +39,16 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 	var packet models.LoRaDataPacket
 	if err := c.ShouldBindJSON(&packet); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	dedupResult := h.dedupService.CheckPacket(packet.PacketID, packet.DeviceID, packet.Timestamp)
+	if dedupResult.IsDuplicate {
+		c.JSON(http.StatusConflict, gin.H{
+			"status":     "duplicate_dropped",
+			"packet_id":  dedupResult.PacketID,
+			"reason":     dedupResult.Reason,
+		})
 		return
 	}
 
@@ -55,11 +73,27 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 			return
 		}
 
-		eventRate, _ := h.influxDB.QueryHourlyAcousticEventRate(data.SensorID, 1)
-		if alert, err := h.alertService.CheckAcousticAlert(data.SensorID, data.Building, data.Location, eventRate); err == nil && alert != nil {
-			c.JSON(http.StatusOK, gin.H{"status": "received", "alert_triggered": true, "alert": alert})
+		rawEventRate := float64(data.EventCount)
+		smoothedEventRate := h.acousticEWMA.Smooth(data.SensorID, rawEventRate)
+
+		if alert, err := h.alertService.CheckAcousticAlert(data.SensorID, data.Building, data.Location, smoothedEventRate); err == nil && alert != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":          "received",
+				"packet_id":       dedupResult.PacketID,
+				"alert_triggered": true,
+				"alert":           alert,
+				"smoothed_rate":   smoothedEventRate,
+			})
 			return
 		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":        "received",
+			"packet_id":     dedupResult.PacketID,
+			"alert_triggered": false,
+			"smoothed_rate": smoothedEventRate,
+		})
+		return
 
 	case "wood_moisture":
 		data := &models.WoodMoistureData{
@@ -76,17 +110,31 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 			return
 		}
 
-		latestMoisture, _ := h.influxDB.QueryLatestMoisture(data.SensorID)
-		if alert, err := h.alertService.CheckMoistureAlert(data.SensorID, data.Building, data.Location, latestMoisture); err == nil && alert != nil {
-			c.JSON(http.StatusOK, gin.H{"status": "received", "alert_triggered": true, "alert": alert})
+		smoothedMoisture := h.moistureEWMA.Smooth(data.SensorID, data.Moisture)
+
+		if alert, err := h.alertService.CheckMoistureAlert(data.SensorID, data.Building, data.Location, smoothedMoisture); err == nil && alert != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":          "received",
+				"packet_id":       dedupResult.PacketID,
+				"alert_triggered": true,
+				"alert":           alert,
+				"smoothed_moisture": smoothedMoisture,
+			})
 			return
 		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":            "received",
+			"packet_id":        dedupResult.PacketID,
+			"alert_triggered":  false,
+			"smoothed_moisture": smoothedMoisture,
+		})
+		return
+
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown device type"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "received", "alert_triggered": false})
 }
 
 func (h *Handler) GetSensors(c *gin.Context) {

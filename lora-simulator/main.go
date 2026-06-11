@@ -4,20 +4,39 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
 type LoRaDataPacket struct {
+	PacketID        string                 `json:"packet_id"`
 	DeviceType      string                 `json:"device_type"`
 	DeviceID        string                 `json:"device_id"`
 	Timestamp       time.Time              `json:"timestamp"`
+	Sequence        uint64                 `json:"sequence"`
 	Data            map[string]interface{} `json:"data"`
 	RSSI            float64                `json:"rssi"`
 	SNR             float64                `json:"snr"`
 	SpreadingFactor int                    `json:"spreading_factor"`
+}
+
+var globalSequence uint64
+
+func generatePacketID(deviceID string, timestamp time.Time, sequence uint64) string {
+	if sequence == 0 {
+		sequence = uint64(time.Now().UnixNano())
+	}
+
+	h := fnv.New64a()
+	h.Write([]byte(deviceID))
+	h.Write([]byte(fmt.Sprintf("%d", timestamp.UnixNano())))
+	h.Write([]byte(fmt.Sprintf("%d", sequence)))
+
+	return fmt.Sprintf("%s-%d-%x", deviceID, timestamp.Unix(), h.Sum64())
 }
 
 type SensorConfig struct {
@@ -182,11 +201,14 @@ func runSimulation() {
 
 		for _, sensor := range acousticSensors {
 			data := generateAcousticData(sensor, hour)
+			seq := atomic.AddUint64(&globalSequence, 1)
 
 			packet := LoRaDataPacket{
+				PacketID:        generatePacketID(sensor.ID, now, seq),
 				DeviceType:      sensor.Type,
 				DeviceID:        sensor.ID,
 				Timestamp:       now,
+				Sequence:        seq,
 				Data:            data,
 				RSSI:            -70 - rand.Float64()*40,
 				SNR:             5 + rand.Float64()*15,
@@ -198,15 +220,25 @@ func runSimulation() {
 			} else {
 				fmt.Printf("Sent acoustic data: %s, events: %v\n", sensor.ID, data["event_count"])
 			}
+
+			if rand.Float64() < 0.15 {
+				time.Sleep(50 * time.Millisecond)
+				if err := sendPacket(packet); err != nil {
+					fmt.Printf("Duplicate acoustic packet (expected): %s\n", sensor.ID)
+				}
+			}
 		}
 
 		for _, sensor := range moistureSensors {
 			data := generateMoistureData(sensor, hour)
+			seq := atomic.AddUint64(&globalSequence, 1)
 
 			packet := LoRaDataPacket{
+				PacketID:        generatePacketID(sensor.ID, now, seq),
 				DeviceType:      sensor.Type,
 				DeviceID:        sensor.ID,
 				Timestamp:       now,
+				Sequence:        seq,
 				Data:            data,
 				RSSI:            -65 - rand.Float64()*35,
 				SNR:             8 + rand.Float64()*12,
@@ -217,6 +249,13 @@ func runSimulation() {
 				fmt.Printf("Error sending moisture data from %s: %v\n", sensor.ID, err)
 			} else {
 				fmt.Printf("Sent moisture data: %s, moisture: %.1f%%\n", sensor.ID, data["moisture"])
+			}
+
+			if rand.Float64() < 0.1 {
+				time.Sleep(30 * time.Millisecond)
+				if err := sendPacket(packet); err != nil {
+					fmt.Printf("Duplicate moisture packet (expected): %s\n", sensor.ID)
+				}
 			}
 		}
 

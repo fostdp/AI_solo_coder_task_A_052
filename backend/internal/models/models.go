@@ -26,13 +26,15 @@ type WoodMoistureData struct {
 }
 
 type LoRaDataPacket struct {
-	DeviceType   string                 `json:"device_type"`
-	DeviceID     string                 `json:"device_id"`
-	Timestamp    time.Time              `json:"timestamp"`
-	Data         map[string]interface{} `json:"data"`
-	RSSI         float64                `json:"rssi"`
-	SNR          float64                `json:"snr"`
-	SpreadingFactor int                 `json:"spreading_factor"`
+	PacketID      string                 `json:"packet_id"`
+	DeviceType    string                 `json:"device_type"`
+	DeviceID      string                 `json:"device_id"`
+	Timestamp     time.Time              `json:"timestamp"`
+	Sequence      uint64                 `json:"sequence"`
+	Data          map[string]interface{} `json:"data"`
+	RSSI          float64                `json:"rssi"`
+	SNR           float64                `json:"snr"`
+	SpreadingFactor int                  `json:"spreading_factor"`
 }
 
 type SensorInfo struct {

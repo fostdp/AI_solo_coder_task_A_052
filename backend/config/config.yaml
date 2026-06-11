@@ -34,3 +34,34 @@ model:
   lstm_input_size: 8
   lstm_hidden_size: 32
   lstm_output_size: 1
+
+pipeline:
+  buffer_size: 4096
+  lora_ingest:
+    expected_items: 100000
+    false_positive_rate: 0.001
+    cache_ttl: 24h
+    max_cache_size: 50000
+  termite_lstm:
+    ewma_acoustic_alpha: 0.3
+    ewma_moisture_alpha: 0.25
+    ewma_max_history: 96
+    spike_threshold_sigma: 2.5
+    consecutive_confirm: 2
+    prediction_hours: 24
+  fumigant_diffusion:
+    default_release_rate: 5.0
+    default_wind_speed: 2.0
+    default_wind_direction: 0
+    stability_class: D
+    grid_resolution: 0.5
+    grid_size_x: 20
+    grid_size_y: 20
+    grid_size_z: 12
+    exposure_time_hours: 1.0
+  alerter:
+    acoustic_threshold: 100.0
+    moisture_threshold: 25.0
+    cooldown_period: 10m
+    enable_wechat: false
+    enable_sms: false

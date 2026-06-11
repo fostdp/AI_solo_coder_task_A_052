@@ -265,6 +265,17 @@ func (pd *PacketDeduplicator) GetStats() map[string]interface{} {
 	}
 }
 
+func (pd *PacketDeduplicator) GetAllKeys() []string {
+	pd.mu.RLock()
+	defer pd.mu.RUnlock()
+
+	keys := make([]string, 0, len(pd.cache))
+	for k := range pd.cache {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (pd *PacketDeduplicator) Reset() {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()

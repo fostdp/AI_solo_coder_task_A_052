@@ -4,10 +4,11 @@ class AncientWoodMonitor {
         this.camera = null;
         this.renderer = null;
         this.controls = null;
+        this.clock = new THREE.Clock();
         this.currentBuilding = '应县木塔';
-        this.buildingGroup = null;
+        this.timberModel = null;
         this.sensorsGroup = null;
-        this.riskVoxelsGroup = null;
+        this.riskVoxels = null;
         this.concentrationGroup = null;
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
@@ -20,11 +21,6 @@ class AncientWoodMonitor {
         this.sensorData = {};
         this.riskZones = [];
         this.alerts = [];
-
-        this.voxelMap = new Map();
-        this.concentrationVoxelMap = new Map();
-        this.lastRiskHash = '';
-        this.voxelsDirty = false;
 
         this.chart = null;
         this.chartType = 'acoustic';
@@ -118,19 +114,18 @@ class AncientWoodMonitor {
     }
 
     createBuilding() {
-        if (this.buildingGroup) {
-            this.scene.remove(this.buildingGroup);
+        if (this.timberModel) {
+            this.scene.remove(this.timberModel.getGroup());
+            this.timberModel.dispose();
         }
 
-        this.buildingGroup = new THREE.Group();
+        this.timberModel = new TimberModel(this.currentBuilding, {
+            woodColor: 0x8B4513,
+            woodDarkColor: 0x654321,
+            roofColor: 0x2f4f4f
+        });
 
-        if (this.currentBuilding === '应县木塔') {
-            this.createYingxianPagoda();
-        } else {
-            this.createFoguangTemple();
-        }
-
-        this.scene.add(this.buildingGroup);
+        this.scene.add(this.timberModel.getGroup());
         this.hideLoading();
     }
 
@@ -510,38 +505,28 @@ class AncientWoodMonitor {
     }
 
     createRiskVoxels() {
-        if (this.riskVoxelsGroup) {
-            this.scene.remove(this.riskVoxelsGroup);
+        if (this.riskVoxels) {
+            this.riskVoxels.dispose();
         }
 
-        this.riskVoxelsGroup = new THREE.Group();
+        this.riskVoxels = new VoxelRisk(this.scene, {
+            defaultSize: 1.5,
+            defaultOpacity: 0.4,
+            criticalColor: 0xff4757,
+            highColor: 0xffa500,
+            mediumColor: 0xffeb00,
+            lowColor: 0x4dc866,
+            normalColor: 0x4a88ff,
+            pulseEnabled: true,
+            pulseSpeed: 0.02
+        });
+
+        this.riskVoxels.setVisible(this.showRisk);
 
         const numVoxels = 15;
-        
+        const mockZones = [];
         for (let i = 0; i < numVoxels; i++) {
             const intensity = Math.random();
-            const size = 0.8 + intensity * 2;
-
-            const geometry = new THREE.BoxGeometry(size, size, size);
-            
-            let color;
-            if (intensity > 0.7) {
-                color = new THREE.Color(1, 0.28, 0.34);
-            } else if (intensity > 0.4) {
-                color = new THREE.Color(1, 0.65, 0);
-            } else {
-                color = new THREE.Color(1, 0.92, 0);
-            }
-
-            const material = new THREE.MeshBasicMaterial({
-                color: color,
-                transparent: true,
-                opacity: 0.3 + intensity * 0.4,
-                wireframe: false
-            });
-
-            const voxel = new THREE.Mesh(geometry, material);
-
             let x, y, z;
             if (this.currentBuilding === '应县木塔') {
                 const angle = Math.random() * Math.PI * 2;
@@ -554,28 +539,20 @@ class AncientWoodMonitor {
                 z = -6 + Math.random() * 12;
                 y = 2 + Math.random() * 8;
             }
-
-            voxel.position.set(x, y, z);
-            voxel.userData = {
-                type: 'risk_voxel',
+            mockZones.push({
+                sensor_id: `V-${i}`,
+                pos_x: x,
+                pos_y: z,
+                pos_z: y,
+                radius: 0.8 + intensity * 0.8,
                 intensity: intensity,
-                riskLevel: intensity > 0.7 ? 'critical' : (intensity > 0.4 ? 'high' : 'medium')
-            };
-
-            const edgesGeometry = new THREE.EdgesGeometry(geometry);
-            const edgesMaterial = new THREE.LineBasicMaterial({
-                color: color,
-                transparent: true,
-                opacity: 0.8
+                risk_level: intensity > 0.7 ? 'critical' : (intensity > 0.4 ? 'high' : 'medium'),
+                event_rate: Math.floor(intensity * 120),
+                location: `区域 ${i + 1}`
             });
-            const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
-            voxel.add(edges);
-
-            this.riskVoxelsGroup.add(voxel);
         }
-
-        this.riskVoxelsGroup.visible = this.showRisk;
-        this.scene.add(this.riskVoxelsGroup);
+        this.riskZones = mockZones;
+        this.riskVoxels.updateRiskZones(this.riskZones);
     }
 
     _getRiskColor(riskLevel) {
@@ -612,73 +589,9 @@ class AncientWoodMonitor {
 
     updateRiskVoxels() {
         if (!this.riskZones || this.riskZones.length === 0) return;
+        if (!this.riskVoxels) return;
 
-        const newHash = JSON.stringify(this.riskZones.map(z => ({
-            id: z.sensor_id, r: z.risk_level, i: z.intensity
-        })));
-        if (newHash === this.lastRiskHash) return;
-        this.lastRiskHash = newHash;
-
-        if (!this.riskVoxelsGroup) {
-            this.riskVoxelsGroup = new THREE.Group();
-            this.scene.add(this.riskVoxelsGroup);
-        }
-
-        const currentKeys = new Set();
-
-        this.riskZones.forEach(zone => {
-            const key = zone.sensor_id || `zone-${Math.random()}`;
-            currentKeys.add(key);
-
-            const intensity = zone.intensity || 0.5;
-            const size = (zone.radius || 1) * 1.5;
-            const riskLevel = zone.risk_level || 'medium';
-            const color = this._getRiskColor(riskLevel);
-            const opacity = 0.3 + intensity * 0.4;
-            const posX = zone.pos_x || 0;
-            const posY = zone.pos_z || 5;
-            const posZ = zone.pos_y || 0;
-
-            if (this.voxelMap.has(key)) {
-                const existing = this.voxelMap.get(key);
-                existing.material.color.copy(color);
-                existing.material.opacity = opacity;
-                existing.position.set(posX, posY, posZ);
-                existing.scale.setScalar(1);
-                existing.userData.intensity = intensity;
-                existing.userData.riskLevel = riskLevel;
-                existing.userData.eventRate = zone.event_rate;
-                existing.userData.name = zone.location || '风险区域';
-
-                const edgeMat = existing.children[0]?.material;
-                if (edgeMat) edgeMat.color.copy(color);
-            } else {
-                const voxel = this._createVoxelMesh(size, color, opacity);
-                voxel.position.set(posX, posY, posZ);
-                voxel.userData = {
-                    type: 'risk_voxel',
-                    intensity: intensity,
-                    riskLevel: riskLevel,
-                    sensorId: zone.sensor_id,
-                    eventRate: zone.event_rate,
-                    name: zone.location || '风险区域'
-                };
-                this.riskVoxelsGroup.add(voxel);
-                this.voxelMap.set(key, voxel);
-            }
-        });
-
-        for (const [key, voxel] of this.voxelMap) {
-            if (!currentKeys.has(key)) {
-                this.riskVoxelsGroup.remove(voxel);
-                if (voxel.geometry) voxel.geometry.dispose();
-                if (voxel.material) voxel.material.dispose();
-                this.voxelMap.delete(key);
-            }
-        }
-
-        this.riskVoxelsGroup.visible = this.showRisk;
-        this.voxelsDirty = true;
+        this.riskVoxels.updateRiskZones(this.riskZones);
     }
 
     createConcentrationField() {
@@ -818,8 +731,8 @@ class AncientWoodMonitor {
         document.getElementById('btn-show-risk').addEventListener('click', (e) => {
             this.showRisk = !this.showRisk;
             e.target.classList.toggle('primary', this.showRisk);
-            if (this.riskVoxelsGroup) {
-                this.riskVoxelsGroup.visible = this.showRisk;
+            if (this.riskVoxels) {
+                this.riskVoxels.setVisible(this.showRisk);
             }
         });
 
@@ -878,11 +791,9 @@ class AncientWoodMonitor {
                 }
             });
         }
-        if (this.riskVoxelsGroup && this.showRisk) {
-            this.riskVoxelsGroup.traverse(child => {
-                if (child.isMesh) {
-                    objects.push(child);
-                }
+        if (this.riskVoxels && this.showRisk) {
+            this.riskVoxels.getVoxels().forEach(voxel => {
+                objects.push(voxel);
             });
         }
 
@@ -1321,13 +1232,11 @@ class AncientWoodMonitor {
     animate() {
         requestAnimationFrame(() => this.animate());
 
-        const time = Date.now() * 0.001;
+        const delta = this.clock ? this.clock.getDelta() : 0.016;
+        const time = this.clock ? this.clock.elapsedTime : Date.now() * 0.001;
 
-        if (this.riskVoxelsGroup && this.showRisk) {
-            this.riskVoxelsGroup.children.forEach((voxel, i) => {
-                const pulse = 1 + Math.sin(time * 2 + i) * 0.1;
-                voxel.scale.setScalar(pulse);
-            });
+        if (this.riskVoxels && this.showRisk) {
+            this.riskVoxels.update(delta);
         }
 
         if (this.sensorsGroup && this.showSensors) {

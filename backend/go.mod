@@ -3,8 +3,10 @@ module ancient-wood-monitor
 go 1.21
 
 require (
+	github.com/gin-contrib/gzip v1.0.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/influxdata/influxdb1-client v0.0.0-20220302092344-a9ab560c08ae
+	github.com/prometheus/client_golang v1.19.0
 	github.com/spf13/viper v1.18.2
 )
 

@@ -4,6 +4,7 @@ import (
 	"ancient-wood-monitor/internal/algorithms"
 	"ancient-wood-monitor/internal/algorithms/lstm"
 	"ancient-wood-monitor/internal/models"
+	pipe "ancient-wood-monitor/internal/pipeline"
 	"ancient-wood-monitor/internal/services"
 	lorasvc "ancient-wood-monitor/internal/services/lora"
 	"math"
@@ -22,9 +23,10 @@ type Handler struct {
 	dedupService  *lorasvc.PacketDeduplicator
 	acousticEWMA  *lstm.EWMASmoother
 	moistureEWMA  *lstm.EWMASmoother
+	pipeline      *pipe.ServicePipeline
 }
 
-func NewHandler(influxDB *services.InfluxDBService, alertService *services.AlertService, sensorService *services.SensorService) *Handler {
+func NewHandler(influxDB *services.InfluxDBService, alertService *services.AlertService, sensorService *services.SensorService, pipeline *pipe.ServicePipeline) *Handler {
 	return &Handler{
 		influxDB:      influxDB,
 		alertService:  alertService,
@@ -32,6 +34,7 @@ func NewHandler(influxDB *services.InfluxDBService, alertService *services.Alert
 		dedupService:  lorasvc.NewPacketDeduplicator(100000, 24*time.Hour, 50000),
 		acousticEWMA:  lstm.NewEWMASmoother(0.3, 48),
 		moistureEWMA:  lstm.NewEWMASmoother(0.25, 48),
+		pipeline:      pipeline,
 	}
 }
 
@@ -76,6 +79,8 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 		rawEventRate := float64(data.EventCount)
 		smoothedEventRate := h.acousticEWMA.Smooth(data.SensorID, rawEventRate)
 
+		h.sendToPipeline(packet)
+
 		if alert, err := h.alertService.CheckAcousticAlert(data.SensorID, data.Building, data.Location, smoothedEventRate); err == nil && alert != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"status":          "received",
@@ -88,10 +93,10 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":        "received",
-			"packet_id":     dedupResult.PacketID,
+			"status":          "received",
+			"packet_id":       dedupResult.PacketID,
 			"alert_triggered": false,
-			"smoothed_rate": smoothedEventRate,
+			"smoothed_rate":   smoothedEventRate,
 		})
 		return
 
@@ -111,6 +116,8 @@ func (h *Handler) ReceiveLoRaData(c *gin.Context) {
 		}
 
 		smoothedMoisture := h.moistureEWMA.Smooth(data.SensorID, data.Moisture)
+
+		h.sendToPipeline(packet)
 
 		if alert, err := h.alertService.CheckMoistureAlert(data.SensorID, data.Building, data.Location, smoothedMoisture); err == nil && alert != nil {
 			c.JSON(http.StatusOK, gin.H{
@@ -393,4 +400,25 @@ func generateTestSignal(length int, samplingRate float64) []float64 {
 			0.1*rand.Float64()
 	}
 	return signal
+}
+
+func (h *Handler) sendToPipeline(packet models.LoRaDataPacket) {
+	if h.pipeline == nil || h.pipeline.Input == nil {
+		return
+	}
+
+	msg := pipe.PipelineMessage{
+		Type: pipe.MsgTypeRawLoRa,
+		Metadata: pipe.Metadata{
+			Timestamp: time.Now(),
+			Source:    "http_handler",
+			TraceID:   packet.PacketID,
+		},
+		Data: packet,
+	}
+
+	select {
+	case h.pipeline.Input <- msg:
+	default:
+	}
 }
